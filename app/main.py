@@ -1,19 +1,54 @@
-from sqlalchemy import text
+from fastapi import FastAPI
 
-from app.database.connection import SessionLocal
-from app.database.seed import main as seed_database
-
-def main():
-    
-    print("Starting Hotel Booking Agent...")
-
-    with SessionLocal() as session:
-        result = session.execute(text("SELECT version();"))
-        version = result.scalar_one()
-
-        print("Successfully connected to PostgreSQL.")
-        print(f"PostgreSQL version: {version}")
+from app.api.routes.availability import router as availability_router
+from app.api.routes.booking import router as booking_router
 
 
-if __name__ == "__main__":
-    seed_database()
+app = FastAPI(
+    title="Hotel Booking Agent API",
+    description=(
+        "Backend API for hotel room availability "
+        "and booking operations."
+    ),
+    version="1.0.0",
+)
+
+
+app.include_router(
+    availability_router,
+    prefix="/api",
+)
+
+app.include_router(
+    booking_router,
+    prefix="/api",
+)
+
+
+@app.get(
+    "/",
+    tags=["Health"],
+)
+def root() -> dict[str, str]:
+    """
+    Basic API health endpoint.
+    """
+
+    return {
+        "status": "ok",
+        "service": "hotel-booking-agent",
+    }
+
+
+@app.get(
+    "/health",
+    tags=["Health"],
+)
+def health_check() -> dict[str, str]:
+    """
+    Health check endpoint.
+    """
+
+    return {
+        "status": "healthy",
+    }
