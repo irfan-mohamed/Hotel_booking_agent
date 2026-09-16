@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes.availability import router as availability_router
-from app.api.routes.booking import router as booking_router
+from app.api.routes.chat import router as chat_router
 
 
 app = FastAPI(
@@ -15,12 +14,7 @@ app = FastAPI(
 
 
 app.include_router(
-    availability_router,
-    prefix="/api",
-)
-
-app.include_router(
-    booking_router,
+    chat_router,
     prefix="/api",
 )
 

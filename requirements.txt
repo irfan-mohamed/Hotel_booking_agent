@@ -1,12 +1,24 @@
+# Core
 SQLAlchemy>=2.0,<3.0
-psycopg[binary]>=3.2,<4.0
 pydantic>=2.0,<3.0
 pydantic-settings>=2.0,<3.0
 python-dotenv>=1.0,<2.0
-pytest>=8.0,<9.0
 email-validator
-fastapi
-uvicorn[standard]
+
+# LLM / Agent
 langgraph
 langchain-core
 langchain-groq
+
+# Web API
+fastapi
+uvicorn[standard]
+
+# Frontend
+streamlit>=1.30,<2.0
+
+# Testing
+pytest>=8.0,<9.0
+
+# PostgreSQL
+psycopg[binary]>=3.2,<4.0

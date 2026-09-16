@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
 
 from app.agents.dependencies import AgentDependencies
 from app.agents.nodes import HotelBookingNodes
@@ -12,18 +13,16 @@ from app.agents.state import BookingState
 
 
 class HotelBookingAgent:
-    """
-    Stateful conversational hotel booking agent.
-    """
-
     def __init__(
         self,
         llm,
-        dependencies: AgentDependencies,
+        extraction_llm,
+        dependencies,
         checkpointer=None,
     ):
         self.nodes = HotelBookingNodes(
             llm=llm,
+            extraction_llm=extraction_llm,
             dependencies=dependencies,
         )
 
@@ -32,6 +31,10 @@ class HotelBookingAgent:
             if checkpointer is not None
             else MemorySaver()
         )
+
+        # ToolNode wraps the LangChain @tool callables so LangGraph can
+        # automatically execute whatever tool the model chose to call.
+        self.tool_node = ToolNode(dependencies.lc_tools)
 
         self.graph = self._build_graph()
 
@@ -53,47 +56,56 @@ class HotelBookingAgent:
         )
 
         graph.add_node(
-            "check_availability",
-            self.nodes.check_availability,
-        )
-
-        graph.add_node(
             "respond",
             self.nodes.respond,
+        )
+
+        # ToolNode executes whichever tool the model called and appends
+        # ToolMessage results to the messages list.
+        graph.add_node(
+            "tools",
+            self.tool_node,
+        )
+
+        # After tool execution, parse results back into state fields.
+        graph.add_node(
+            "process_tool_results",
+            self.nodes.process_tool_results,
         )
 
         # -----------------------------------------------------
         # Edges
         # -----------------------------------------------------
 
-        graph.add_edge(
-            START,
-            "extract_information",
-        )
-
-        graph.add_edge(
-            "extract_information",
-            "validate_requirements",
-        )
+        graph.add_edge(START, "extract_information")
+        graph.add_edge("extract_information", "validate_requirements")
 
         graph.add_conditional_edges(
             "validate_requirements",
             self._route_after_validation,
             {
                 "respond": "respond",
-                "availability": "check_availability",
             },
         )
 
-        graph.add_edge(
-            "check_availability",
+        # After respond: if the model emitted tool calls → run tools,
+        # otherwise end the turn.
+        graph.add_conditional_edges(
             "respond",
+            self._route_after_respond,
+            {
+                "tools": "tools",
+                "end": END,
+            },
         )
 
-        graph.add_edge(
-            "respond",
-            END,
-        )
+        # Tool execution always flows into result processing.
+        graph.add_edge("tools", "process_tool_results")
+
+        # After state is updated from tool results, let the model
+        # respond again (it will now produce a conversational reply
+        # because tool results are in the messages).
+        graph.add_edge("process_tool_results", "respond")
 
         return graph.compile(
             checkpointer=self.checkpointer,
@@ -106,39 +118,35 @@ class HotelBookingAgent:
     @staticmethod
     def _route_after_validation(
         state: BookingState,
-    ) -> Literal[
-        "respond",
-        "availability",
-    ]:
+    ) -> Literal["respond"]:
         """
-        Decide whether the availability tool can be called.
+        Always route to respond. The respond node (with tools bound)
+        decides on its own whether to call a tool or reply directly.
 
-        This decision is deterministic.
+        Validation errors are passed via state context so the LLM
+        can explain them to the guest.
         """
+        return "respond"
 
-        if state.get("requirements_error"):
-            return "respond"
+    @staticmethod
+    def _route_after_respond(
+        state: BookingState,
+    ) -> Literal["tools", "end"]:
+        """
+        If the last AIMessage has tool_calls, route to the ToolNode.
+        Otherwise, the turn is complete.
+        """
+        messages = state.get("messages", [])
 
-        required_fields = [
-            "check_in",
-            "check_out",
-            "bed_type",
-            "breakfast",
-            "guests",
-        ]
+        if not messages:
+            return "end"
 
-        requirements_complete = all(
-            state.get(field) is not None
-            for field in required_fields
-        )
+        last_message = messages[-1]
 
-        if not requirements_complete:
-            return "respond"
+        if isinstance(last_message, AIMessage) and last_message.tool_calls:
+            return "tools"
 
-        if state.get("availability_checked"):
-            return "respond"
-
-        return "availability"
+        return "end"
 
     # =========================================================
     # Public interface
@@ -174,10 +182,23 @@ class HotelBookingAgent:
 
         return result
 
+    def get_state(self, session_id: str) -> BookingState | None:
+        """
+        Retrieve the current persisted state for a session.
+        """
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+            }
+        }
+        snapshot = self.graph.get_state(config)
+        return snapshot.values if snapshot else None
+
 
 def create_hotel_booking_agent(
     llm,
     dependencies: AgentDependencies,
+    extraction_llm,
     checkpointer=None,
 ) -> HotelBookingAgent:
     """
@@ -186,6 +207,7 @@ def create_hotel_booking_agent(
 
     return HotelBookingAgent(
         llm=llm,
+        extraction_llm=extraction_llm,
         dependencies=dependencies,
         checkpointer=checkpointer,
     )

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from langgraph.graph import END
 
 from app.agents.dependencies import AgentDependencies
 from app.agents.prompts import EXTRACTION_PROMPT, SYSTEM_PROMPT
 from app.agents.schemas import AgentExtraction
 from app.agents.state import BookingState
+from app.schemas.availability import AvailabilityResponse
+from app.schemas.booking import BookingResponse
 
 
 class HotelBookingNodes:
@@ -18,28 +20,33 @@ class HotelBookingNodes:
     Nodes used by the hotel booking LangGraph.
 
     LLM responsibilities:
-        - understand the user's message
-        - extract structured information
-        - generate conversational responses
+        - extract structured booking information from each user message
+        - generate conversational responses AND call availability /
+          booking tools when needed (tool-calling model)
 
     Deterministic responsibilities:
-        - deciding whether required fields exist
-        - availability
-        - booking
-        - validation
+        - validate booking requirements
+        - update state from tool call results
+        - routing decisions
     """
 
     def __init__(
         self,
         llm,
+        extraction_llm,
         dependencies: AgentDependencies,
     ):
-        self.llm = llm
+        self.extraction_llm = extraction_llm.with_structured_output(
+            AgentExtraction,
+        )
         self.dependencies = dependencies
 
-        self.extraction_llm = llm.with_structured_output(
-            AgentExtraction
-        )
+        # Bind the LangChain tools to the response LLM so gpt-oss-20b
+        # can call them properly via the tool-calling API.
+        if dependencies.lc_tools:
+            self.llm = llm.bind_tools(dependencies.lc_tools)
+        else:
+            self.llm = llm
 
     # =========================================================
     # Extraction
@@ -78,6 +85,10 @@ class HotelBookingNodes:
                     EXTRACTION_PROMPT,
                 ),
                 (
+                    "system",
+                    "Today's date is {today}.",
+                ),
+                (
                     "human",
                     "{message}",
                 ),
@@ -89,6 +100,7 @@ class HotelBookingNodes:
         extraction: AgentExtraction = chain.invoke(
             {
                 "message": latest_user_message.content,
+                "today": date.today().isoformat(),
             }
         )
 
@@ -135,6 +147,10 @@ class HotelBookingNodes:
             updates["selected_room_id"] = None
             updates["selected_room_no"] = None
 
+            # If requirements change, the booking is no longer confirmed.
+            updates["booking_confirmed"] = False
+            updates["booking"] = None
+
         return updates
 
     # =========================================================
@@ -153,8 +169,6 @@ class HotelBookingNodes:
 
         check_in = state.get("check_in")
         check_out = state.get("check_out")
-        bed_type = state.get("bed_type")
-        breakfast = state.get("breakfast")
         guests = state.get("guests")
 
         errors: list[str] = []
@@ -188,36 +202,61 @@ class HotelBookingNodes:
         }
 
     # =========================================================
-    # Availability
+    # Tool result processing
     # =========================================================
 
-    def check_availability(
+    def process_tool_results(
         self,
         state: BookingState,
     ) -> dict:
         """
-        Call the deterministic availability tool.
+        After the ToolNode executes tool calls, parse the ToolMessage
+        results and update structured state fields.
 
-        This node is only reached when all required booking
-        requirements are available and valid.
+        This node runs after every ToolNode execution so routing logic
+        downstream can still use state fields (availability_checked,
+        booking_confirmed, etc.) rather than parsing raw messages.
         """
 
-        response = (
-            self.dependencies.availability_tool
-            .check_room_availability(
-                check_in=state["check_in"],
-                check_out=state["check_out"],
-                bed_type=state["bed_type"],
-                breakfast=state["breakfast"],
-                guests=state["guests"],
-            )
-        )
+        messages = state.get("messages", [])
+        updates: dict = {}
 
-        return {
-            "availability": response,
-            "availability_checked": True,
-            "requirements_error": None,
-        }
+        # Walk backwards through messages to find unprocessed ToolMessages.
+        for msg in reversed(messages):
+            if not isinstance(msg, ToolMessage):
+                break  # stop at the first non-ToolMessage
+
+            try:
+                payload = json.loads(msg.content)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            # ---- availability result --------------------------------
+            if msg.name == "check_availability":
+                try:
+                    availability = AvailabilityResponse.model_validate(payload)
+                    updates["availability"] = availability
+                    updates["availability_checked"] = True
+                    updates["requirements_error"] = None
+                except Exception:
+                    pass
+
+            # ---- booking result ------------------------------------
+            elif msg.name == "create_booking":
+                if "error" in payload:
+                    updates["booking"] = None
+                    updates["booking_confirmed"] = False
+                    updates["booking_error"] = payload["error"]
+                else:
+                    try:
+                        booking = BookingResponse.model_validate(payload)
+                        updates["booking"] = booking
+                        updates["booking_confirmed"] = True
+                        updates["booking_error"] = None
+                    except Exception:
+                        pass
+
+        return updates
 
     # =========================================================
     # Response generation
@@ -230,14 +269,17 @@ class HotelBookingNodes:
         """
         Generate the next conversational response.
 
-        Tool results and state are supplied to the LLM.
+        The response LLM has tools bound to it. If the model decides a
+        tool call is needed, it emits an AIMessage with tool_calls — the
+        graph then routes to the ToolNode. If it produces plain text,
+        the graph ends the turn.
         """
 
         availability = state.get("availability")
 
         context = {
-            "check_in": state.get("check_in"),
-            "check_out": state.get("check_out"),
+            "check_in": str(state.get("check_in")) if state.get("check_in") else None,
+            "check_out": str(state.get("check_out")) if state.get("check_out") else None,
             "bed_type": state.get("bed_type"),
             "breakfast": state.get("breakfast"),
             "guests": state.get("guests"),
@@ -255,9 +297,8 @@ class HotelBookingNodes:
                 if state.get("booking")
                 else None
             ),
-            "requirements_error": state.get(
-                "requirements_error"
-            ),
+            "booking_confirmed": state.get("booking_confirmed", False),
+            "requirements_error": state.get("requirements_error"),
             "booking_error": state.get("booking_error"),
         }
 
@@ -274,7 +315,7 @@ class HotelBookingNodes:
                 (
                     "system",
                     """
-Current deterministic booking state:
+Current booking state:
 
 {context}
 """,
@@ -292,45 +333,5 @@ Current deterministic booking state:
         )
 
         return {
-            "messages": [
-                AIMessage(
-                    content=response.content,
-                )
-            ]
+            "messages": [response],
         }
-
-    # =========================================================
-    # Booking
-    # =========================================================
-
-    def create_booking(
-        self,
-        state: BookingState,
-    ) -> dict:
-        """
-        Create the booking using the deterministic booking tool.
-        """
-
-        try:
-            response = (
-                self.dependencies.booking_tool
-                .create_booking(
-                    room_id=state["selected_room_id"],
-                    check_in=state["check_in"],
-                    check_out=state["check_out"],
-                    guests=state["guests"],
-                    guest_name=state["guest_name"],
-                    guest_email=state["guest_email"],
-                )
-            )
-
-            return {
-                "booking": response,
-                "booking_error": None,
-            }
-
-        except ValueError as exc:
-            return {
-                "booking": None,
-                "booking_error": str(exc),
-            }

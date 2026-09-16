@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from datetime import date
+from typing import TypedDict
 
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+from typing_extensions import Annotated
 
 from app.schemas.availability import AvailabilityResponse
 from app.schemas.booking import BookingResponse
 
 
 class BookingState(TypedDict, total=False):
-
-    messages: list[BaseMessage]
+    messages: Annotated[list[BaseMessage], add_messages]
 
     # Search requirements
     check_in: date | None
@@ -34,6 +36,7 @@ class BookingState(TypedDict, total=False):
     # Booking
     booking: BookingResponse | None
     booking_error: str | None
+    booking_confirmed: bool
 
     # Validation
     requirements_error: str | None
