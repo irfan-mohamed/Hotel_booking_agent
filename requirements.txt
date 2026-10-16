@@ -10,6 +10,9 @@ langgraph
 langchain-core
 langchain-groq
 
+# Observability
+langfuse>=2.0,<3.0
+
 # Web API
 fastapi
 uvicorn[standard]

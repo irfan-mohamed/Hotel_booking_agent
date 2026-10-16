@@ -17,6 +17,7 @@ from typing import Callable
 
 from langchain_core.tools import tool
 
+from app.observability import tool_span
 from app.tools.availability_tool import AvailabilityTool
 from app.tools.booking_tool import BookingTool
 
@@ -63,7 +64,22 @@ def make_availability_tool(availability_tool: AvailabilityTool) -> Callable:
             breakfast=breakfast,
             guests=guests,
         )
-        return response.model_dump_json()
+        result_json = response.model_dump_json()
+
+        # ---- Langfuse span -------------------------------------------
+        with tool_span(
+            tool_name="check_availability",
+            tool_input={
+                "check_in": check_in,
+                "check_out": check_out,
+                "bed_type": bed_type,
+                "breakfast": breakfast,
+                "guests": guests,
+            },
+        ) as ts:
+            ts["output"] = result_json
+
+        return result_json
 
     return check_availability
 
@@ -113,8 +129,34 @@ def make_booking_tool(booking_tool_instance: BookingTool) -> Callable:
                 guest_name=guest_name,
                 guest_email=guest_email,
             )
-            return response.model_dump_json()
+            result_json = response.model_dump_json()
+
+            # ---- Langfuse span ---------------------------------------
+            with tool_span(
+                tool_name="create_booking",
+                tool_input={
+                    "room_id": room_id,
+                    "check_in": check_in,
+                    "check_out": check_out,
+                    "guests": guests,
+                    "guest_name": guest_name,
+                    "guest_email": guest_email,
+                },
+            ) as ts:
+                ts["output"] = result_json
+
+            return result_json
         except ValueError as exc:
-            return json.dumps({"error": str(exc)})
+            error_json = json.dumps({"error": str(exc)})
+
+            # ---- Langfuse span (error) --------------------------------
+            with tool_span(
+                tool_name="create_booking",
+                tool_input={"room_id": room_id},
+            ) as ts:
+                ts["output"] = error_json
+                ts["error"] = str(exc)
+
+            return error_json
 
     return create_booking

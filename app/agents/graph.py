@@ -10,6 +10,7 @@ from langgraph.prebuilt import ToolNode
 from app.agents.dependencies import AgentDependencies
 from app.agents.nodes import HotelBookingNodes
 from app.agents.state import BookingState
+from app.observability import start_trace
 
 
 class HotelBookingAgent:
@@ -161,7 +162,16 @@ class HotelBookingAgent:
         Process one user message.
 
         session_id identifies the conversation thread.
+        Opens a Langfuse root trace that wraps the entire graph execution
+        so every LLM call and tool invocation appears as a child span.
         """
+
+        # ---- Open Langfuse root trace --------------------------------
+        trace_ctx = start_trace(
+            user_query=message,
+            session_id=session_id,
+            tags=["hotel-booking", "langgraph"],
+        )
 
         config = {
             "configurable": {
@@ -179,6 +189,11 @@ class HotelBookingAgent:
             },
             config=config,
         )
+
+        # ---- Close trace with final assistant reply ------------------
+        messages = result.get("messages", [])
+        final_reply = messages[-1].content if messages else ""
+        trace_ctx.finish(output=final_reply)
 
         return result
 

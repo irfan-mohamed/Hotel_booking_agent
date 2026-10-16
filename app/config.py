@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # ----------------------------------------------------------------
     app_env: str = "development"
 
+    # ----------------------------------------------------------------
+    # Observability — Langfuse
+    # ----------------------------------------------------------------
+    langfuse_secret_key: str = ""
+    langfuse_public_key: str = ""
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -11,6 +11,7 @@ from app.agents.dependencies import AgentDependencies
 from app.agents.prompts import EXTRACTION_PROMPT, SYSTEM_PROMPT
 from app.agents.schemas import AgentExtraction
 from app.agents.state import BookingState
+from app.observability import llm_generation_span
 from app.schemas.availability import AvailabilityResponse
 from app.schemas.booking import BookingResponse
 
@@ -97,12 +98,25 @@ class HotelBookingNodes:
 
         chain = extraction_prompt | self.extraction_llm
 
-        extraction: AgentExtraction = chain.invoke(
-            {
-                "message": latest_user_message.content,
-                "today": date.today().isoformat(),
-            }
+        # ---- Langfuse span: extraction LLM call -----------------------
+        model_name = getattr(
+            getattr(self.extraction_llm, "bound", self.extraction_llm),
+            "model_name",
+            "extraction-llm",
         )
+        with llm_generation_span(
+            name="extract_information",
+            model=model_name,
+            input_data=latest_user_message.content,
+        ) as span_result:
+            extraction: AgentExtraction = chain.invoke(
+                {
+                    "message": latest_user_message.content,
+                    "today": date.today().isoformat(),
+                }
+            )
+            span_result["response"] = extraction
+            span_result["output"] = str(extraction)
 
         updates = {}
 
@@ -325,12 +339,23 @@ Current booking state:
 
         chain: Runnable = response_prompt | self.llm
 
-        response = chain.invoke(
-            {
-                "messages": state.get("messages", []),
-                "context": context,
-            }
-        )
+        # ---- Langfuse span: respond LLM call -------------------------
+        model_name = getattr(self.llm, "model_name", "response-llm")
+        with llm_generation_span(
+            name="respond",
+            model=model_name,
+            input_data={
+                "messages_count": len(state.get("messages", [])),
+                "context_keys": list(context.keys()),
+            },
+        ) as span_result:
+            response = chain.invoke(
+                {
+                    "messages": state.get("messages", []),
+                    "context": context,
+                }
+            )
+            span_result["response"] = response
 
         return {
             "messages": [response],
