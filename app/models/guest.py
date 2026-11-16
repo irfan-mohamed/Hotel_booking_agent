@@ -1,47 +1,15 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-from sqlalchemy import Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.database.connection import Base
-
-if TYPE_CHECKING:
-    from app.models.booking import Booking
-
-
-class Guest(Base):
-    __tablename__ = "guests"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    name: Mapped[str] = mapped_column(
-        String(150),
-        nullable=False,
-    )
-
-    email: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-        index=True,
-    )
-
-    bookings: Mapped[list["Booking"]] = relationship(
-        "Booking",
-        back_populates="guest",
-        cascade="all, delete-orphan",
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"<Guest("
-            f"id={self.id}, "
-            f"name={self.name}, "
-            f"email={self.email}"
-            f")>"
-        )
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # Indicates whether the guest's email address has been verified
+    is_email_verified = Column(Boolean, nullable=False, default=False)
+    def __repr__(self):
+        return (f"<Guest id={self.id} name={self.name} email={self.email} "
+                f"is_email_verified={self.is_email_verified}>")
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "is_email_verified": self.is_email_verified,
+        }
