@@ -1,71 +1,26 @@
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from app.models import Guest
+from typing import Optional
+from datetime import datetime
 
-
-class GuestRepository:
-    """
-    Handles database operations related to guests.
-    """
-
-    def __init__(self, db: Session):
-        self.db = db
-
-    def get_by_id(self, guest_id: int) -> Guest | None:
+    def get_by_verification_token(self, token_hash: str) -> Optional[Guest]:
         """
-        Retrieve a guest by ID.
+        Retrieve a Guest whose email verification token matches ``token_hash`` and whose
+        verification expiry timestamp is still in the future.
         """
-        statement = select(Guest).where(Guest.id == guest_id)
-
-        return self.db.execute(statement).scalar_one_or_none()
-
-    def get_by_email(self, email: str) -> Guest | None:
-        """
-        Retrieve a guest by email address.
-        """
-
-        statement = select(Guest).where(
-            Guest.email == email
+        now = datetime.utcnow()
+        return (
+            self.session.query(Guest)
+            .filter(
+                Guest.email_verification_token == token_hash,
+                Guest.email_verification_expires_at > now,
+            )
+            .first()
         )
 
-        return self.db.execute(statement).scalar_one_or_none()
-
-    def create(
-        self,
-        name: str,
-        email: str,
-    ) -> Guest:
+    def verify_email(self, guest: Guest) -> None:
         """
-        Create a new guest.
+        Mark the guest's email as verified and persist the change.
         """
-
-        guest = Guest(
-            name=name,
-            email=email,
-        )
-
-        self.db.add(guest)
-        self.db.flush()
-
-        return guest
-
-    def get_or_create(
-        self,
-        name: str,
-        email: str,
-    ) -> Guest:
-        """
-        Return an existing guest if the email exists.
-        Otherwise create a new guest.
-        """
-
-        guest = self.get_by_email(email)
-
-        if guest:
-            return guest
-
-        return self.create(
-            name=name,
-            email=email,
-        )
+        guest.mark_email_verified()
+        self.session.commit()
