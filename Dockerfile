@@ -1,18 +1,6 @@
-FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /app
-
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
-COPY app ./app
-COPY frontend ./frontend
-
-EXPOSE 8000 8501
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENV EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+ENV EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT}
+ENV EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+ENV EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+ENV EMAIL_FROM=${EMAIL_FROM}
+ENV EMAIL_TO=${EMAIL_TO}

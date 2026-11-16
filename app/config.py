@@ -1,70 +1,41 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+    # Email SMTP configuration
+    EMAIL_SMTP_HOST: str = os.getenv('EMAIL_SMTP_HOST')
+    # Default SMTP port is 587 (TLS). Override via env if needed.
+    EMAIL_SMTP_PORT: int = int(os.getenv('EMAIL_SMTP_PORT', '587'))
+    EMAIL_USERNAME: str = os.getenv('EMAIL_USERNAME')
+    EMAIL_PASSWORD: str = os.getenv('EMAIL_PASSWORD')
+    EMAIL_FROM_ADDRESS: str = os.getenv('EMAIL_FROM_ADDRESS')
 
-
-class Settings(BaseSettings):
-    # ----------------------------------------------------------------
-    # PostgreSQL
-    # ----------------------------------------------------------------
-    postgres_db: str = "hotel_booking"
-    postgres_user: str = "hotel_user"
-    postgres_password: str = "hotel_password"
-    postgres_host: str = "postgres"
-    postgres_port: int = 5432
-
-    # ----------------------------------------------------------------
-    # Database URL
-    # Defaults to PostgreSQL built from individual POSTGRES_* vars.
-    # Override by setting DATABASE_URL explicitly in .env.
-    # ----------------------------------------------------------------
-    database_url: str = ""
-
-    # ----------------------------------------------------------------
-    # Test database
-    # ----------------------------------------------------------------
-    test_database_url: str = ""
-
-    # ----------------------------------------------------------------
-    # LLM
-    # ----------------------------------------------------------------
-    groq_api_key: str = ""
-    groq_model: str = ""
-
-    # ----------------------------------------------------------------
-    # Application
-    # ----------------------------------------------------------------
-    app_env: str = "development"
-
-    # ----------------------------------------------------------------
-    # Observability — Langfuse
-    # ----------------------------------------------------------------
-    langfuse_secret_key: str = ""
-    langfuse_public_key: str = ""
-    langfuse_base_url: str = "https://us.cloud.langfuse.com"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
+    # Token secret used for email verification links.
+    # Falls back to the application's main secret key if not explicitly set.
+    EMAIL_VERIFICATION_TOKEN_SECRET: str = os.getenv(
+        'EMAIL_VERIFICATION_TOKEN_SECRET',
+        getattr(Config, 'JWT_SECRET_KEY', None)  # type: ignore[attr-defined]
     )
 
-    def get_database_url(self) -> str:
-        """Return DATABASE_URL if set, otherwise build from POSTGRES_* vars."""
-        if self.database_url:
-            return self.database_url
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+    # Expiry time for email verification tokens (default: 24 hours).
+    EMAIL_VERIFICATION_TOKEN_EXPIRY_SECONDS: int = int(
+        os.getenv('EMAIL_VERIFICATION_TOKEN_EXPIRY_SECONDS', '86400')
+    )
 
-    def get_test_database_url(self) -> str:
-        """Return TEST_DATABASE_URL if set, otherwise derive from main DB with _test suffix."""
-        if self.test_database_url:
-            return self.test_database_url
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}_test"
-        )
-
-
-settings = Settings()
+    @classmethod
+    def validate_email_config(cls) -> None:
+        """
+        Validate that all required email configuration values are present.
+        This method should be called by the email service before attempting
+        to send any messages. It raises a RuntimeError with a clear message
+        if any required setting is missing.
+        """
+        missing = []
+        if not cls.EMAIL_SMTP_HOST:
+            missing.append('EMAIL_SMTP_HOST')
+        if not cls.EMAIL_USERNAME:
+            missing.append('EMAIL_USERNAME')
+        if not cls.EMAIL_PASSWORD:
+            missing.append('EMAIL_PASSWORD')
+        if not cls.EMAIL_FROM_ADDRESS:
+            missing.append('EMAIL_FROM_ADDRESS')
+        if missing:
+            raise RuntimeError(
+                f'Missing required email configuration variables: {', '.join(missing)}'
+            )
