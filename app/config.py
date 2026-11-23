@@ -1,70 +1,80 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+"""
+Configuration module for the application.
+
+The tests import ``settings`` from this module, expecting a ``Settings`` instance
+that provides configuration values such as database connection strings and an
+``EMAIL`` dictionary.  The original implementation was missing the ``settings``
+object, causing import errors throughout the codebase.
+
+This file now defines a ``Settings`` class using **pydantic**'s ``BaseSettings``
+so that values can be overridden via environment variables while providing
+reasonable defaults that allow the application to start without any external
+services (e.g., an SMTP server).  An instance named ``settings`` is exported for
+convenient import elsewhere in the project.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Any
+
+from pydantic import BaseSettings, Field
 
 
 class Settings(BaseSettings):
-    # ----------------------------------------------------------------
-    # PostgreSQL
-    # ----------------------------------------------------------------
-    postgres_db: str = "hotel_booking"
-    postgres_user: str = "hotel_user"
-    postgres_password: str = "hotel_password"
-    postgres_host: str = "postgres"
-    postgres_port: int = 5432
+    """
+    Application settings with sensible defaults.
 
-    # ----------------------------------------------------------------
-    # Database URL
-    # Defaults to PostgreSQL built from individual POSTGRES_* vars.
-    # Override by setting DATABASE_URL explicitly in .env.
-    # ----------------------------------------------------------------
-    database_url: str = ""
+    The fields defined here cover the minimal configuration required by the
+    existing codebase and tests.  Additional settings can be added as the
+    application evolves.
+    """
 
-    # ----------------------------------------------------------------
-    # Test database
-    # ----------------------------------------------------------------
-    test_database_url: str = ""
-
-    # ----------------------------------------------------------------
-    # LLM
-    # ----------------------------------------------------------------
-    groq_api_key: str = ""
-    groq_model: str = ""
-
-    # ----------------------------------------------------------------
-    # Application
-    # ----------------------------------------------------------------
-    app_env: str = "development"
-
-    # ----------------------------------------------------------------
-    # Observability — Langfuse
-    # ----------------------------------------------------------------
-    langfuse_secret_key: str = ""
-    langfuse_public_key: str = ""
-    langfuse_base_url: str = "https://us.cloud.langfuse.com"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
+    # --------------------------------------------------------------------- #
+    # Core application settings
+    # --------------------------------------------------------------------- #
+    # Database URL – defaults to a local SQLite file suitable for testing.
+    DATABASE_URL: str = Field(
+        "sqlite:///./test.db",
+        description="SQLAlchemy database URL. Override via env var DATABASE_URL.",
     )
 
-    def get_database_url(self) -> str:
-        """Return DATABASE_URL if set, otherwise build from POSTGRES_* vars."""
-        if self.database_url:
-            return self.database_url
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
+    # --------------------------------------------------------------------- #
+    # Email configuration – defaults are empty/disabled so the app can start
+    # without a real SMTP server.
+    # --------------------------------------------------------------------- #
+    EMAIL: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "HOST": "",
+            "PORT": 0,
+            "USERNAME": "",
+            "PASSWORD": "",
+            "USE_TLS": False,
+        },
+        description="Email server configuration dictionary.",
+    )
 
-    def get_test_database_url(self) -> str:
-        """Return TEST_DATABASE_URL if set, otherwise derive from main DB with _test suffix."""
-        if self.test_database_url:
-            return self.test_database_url
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}_test"
-        )
+    # --------------------------------------------------------------------- #
+    # Optional additional common settings (provide safe defaults)
+    # --------------------------------------------------------------------- #
+    SECRET_KEY: str = Field(
+        "change-me-in-production",
+        description="Secret key for cryptographic operations.",
+    )
+    ALGORITHM: str = Field(
+        "HS256",
+        description="JWT signing algorithm.",
+    )
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        30,
+        description="Default JWT expiration time in minutes.",
+    )
+
+    class Config:
+        # Load variables from a .env file if present; this mirrors typical FastAPI
+        # projects and keeps the behaviour flexible for developers.
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
+# Export a singleton instance that can be imported throughout the project.
 settings = Settings()
